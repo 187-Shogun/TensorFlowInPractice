@@ -12,13 +12,14 @@ Description: Binary classifier to perform sentiment analysis on an IMDB dataset
 
 
 from tensorflow.keras.utils import get_file, text_dataset_from_directory
-from tensorflow.keras.layers import TextVectorization, Embedding, Dropout, GlobalAveragePooling1D, Dense
+from tensorflow.keras.layers import TextVectorization, Embedding, Dropout, GlobalAveragePooling1D, Dense, Reshape
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.losses import BinaryCrossentropy
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.metrics import BinaryAccuracy
 from matplotlib import pyplot as plt
 import tensorflow as tf
+import tensorflow_hub as hub
 import re
 import os
 import shutil
@@ -105,6 +106,25 @@ def build_neural_network(max_features: int, embedding_dim: int) -> Sequential:
     return model
 
 
+def build_custom_network() -> Sequential:
+    embedding = 'https://tfhub.dev/google/nnlm-en-dim50/2'
+    model = Sequential([
+        hub.KerasLayer(embedding, input_shape=[], dtype=tf.string, trainable=True),
+        Dropout(0.2),
+        Dense(16),
+        Dropout(0.2),
+        Reshape((16, 1)),
+        GlobalAveragePooling1D(),
+        Dense(1)
+    ])
+    model.compile(
+        loss=BinaryCrossentropy(from_logits=True),
+        optimizer=Adam(),
+        metrics=BinaryAccuracy(threshold=0.0)
+    )
+    return model
+
+
 def plot_loss(history_dict: dict):
     acc = history_dict['binary_accuracy']
     loss = history_dict['loss']
@@ -137,13 +157,13 @@ def main():
     # Fetch datasets:
     dataset_path = get_imdb_dataset()
     train_dir = os.path.join(dataset_path, 'train')
-    # test_dir = os.path.join(dataset_path, 'test')
+    test_dir = os.path.join(dataset_path, 'test')
     remove_unnecesary_folders(train_dir)
 
     # Load them into a TF generator:
     raw_train_ds = get_train_val_dataset(subset='training', directory=train_dir)
     raw_val_ds = get_train_val_dataset(subset='validation', directory=train_dir)
-    # raw_test_ds = get_test_dataset(directory=test_dir)
+    raw_test_ds = get_test_dataset(directory=test_dir)
 
     # Vectorize the datasets:
     MAX_FEATURES = 10_000
@@ -152,19 +172,23 @@ def main():
     vxt_layer.adapt(raw_train_ds.map(lambda x, y: x))
     train_ds = raw_train_ds.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
     val_ds = raw_val_ds.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
-    # test_ds = raw_test_ds.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
+    test_ds = raw_test_ds.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
 
     # Optimize datasets:
     AUTOTUNE = tf.data.AUTOTUNE
+    raw_train_ds = raw_train_ds.cache().prefetch(buffer_size=AUTOTUNE)
+    raw_val_ds = raw_val_ds.cache().prefetch(buffer_size=AUTOTUNE)
+
     train_ds = train_ds.cache().prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
-    # test_ds = test_ds.cache().prefetch(buffer_size=AUTOTUNE)
+    test_ds = test_ds.cache().prefetch(buffer_size=AUTOTUNE)
 
     # Build a network and train it:
     EMBEDDING_DIM = 32
-    EPOCHS = 20
-    model = build_neural_network(max_features=MAX_FEATURES, embedding_dim=EMBEDDING_DIM)
-    training_data = model.fit(x=train_ds, validation_data=val_ds, epochs=EPOCHS)
+    EPOCHS = 10
+    # model = build_neural_network(max_features=MAX_FEATURES, embedding_dim=EMBEDDING_DIM)
+    model = build_custom_network()
+    training_data = model.fit(x=raw_train_ds, validation_data=raw_val_ds, epochs=EPOCHS)
     history_dict = training_data.history
     plot_loss(history_dict)
     plot_accuracy(history_dict)
