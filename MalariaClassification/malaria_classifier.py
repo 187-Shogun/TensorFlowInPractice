@@ -20,6 +20,8 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.losses import BinaryCrossentropy
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
 import tensorflow as tf
+import seaborn as sn
+import pandas as pd
 import os
 import shutil
 import random
@@ -29,16 +31,19 @@ AUTOTUNE = tf.data.AUTOTUNE
 TRAIN_DIR = os.path.join(os.getcwd(), 'Datasets', 'Train')
 TEST_DIR = os.path.join(os.getcwd(), 'Datasets', 'Test')
 LOGS_DIR = os.path.join(os.getcwd(), 'Logs')
+CM_DIR = os.path.join(os.getcwd(), 'ConfusionMatrixes')
+MODELS_DIR = os.path.join(os.getcwd(), 'Models')
 BATCH_SIZE = 32
-IM_HEIGHT = 256
-IM_WIDTH = 256
-EPOCHS = 50
+IM_HEIGHT = 200
+IM_WIDTH = 200
+EPOCHS = 100
+PATIENCE = 20
 
 
-def get_logs_dir(model_name: str):
+def get_model_version_name(model_name: str):
     ts = datetime.now(timezone('America/Costa_Rica'))
     run_id = ts.strftime("%Y%m%d-%H%M%S")
-    return os.path.join(LOGS_DIR, f"{model_name}_{run_id}")
+    return f"{model_name}_v.{run_id}"
 
 
 def reset_folders():
@@ -51,7 +56,7 @@ def reset_folders():
     os.makedirs(os.path.join(TEST_DIR, 'Uninfected'))
 
 
-def split_raw_dataset(test_split: float = 0.2, reset: bool = False):
+def split_raw_dataset(test_split: float = 0.2, reset: bool = True):
     # Check if work is already done:
     if reset is False:
         return None
@@ -101,6 +106,15 @@ def get_dataset(batch_size: int, im_height: int, im_width: int, subset: str = 't
     )
 
 
+def get_test_dataset(batch_size: int, im_height: int, im_width: int):
+    return image_dataset_from_directory(
+        TEST_DIR,
+        seed=420,
+        image_size=(im_height, im_width),
+        batch_size=batch_size,
+    )
+
+
 def get_baseline_nn():
     model_layers = [
         layers.Flatten(input_shape=(IM_HEIGHT, IM_WIDTH, 3)),
@@ -138,7 +152,7 @@ def get_best_cnn():
     model_layers = [
         layers.Conv2D(64, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
         layers.MaxPool2D(),
-        layers.Conv2D(32, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
+        layers.Conv2D(32, 3, activation='relu'),
         layers.MaxPool2D(),
         layers.Flatten(),
         layers.Dense(128, activation='relu'),
@@ -156,10 +170,11 @@ def get_best_cnn():
 def get_custom_cnn():
     model_layers = [
         layers.RandomFlip(),
-        layers.RandomRotation(0.45),
+        layers.RandomRotation((0.0, 1.0)),
+        layers.RandomContrast((0.0, 0.5)),
         layers.Conv2D(64, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
         layers.MaxPool2D(),
-        layers.Conv2D(32, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
+        layers.Conv2D(32, 3, activation='relu'),
         layers.MaxPool2D(),
         layers.Flatten(),
         layers.Dense(128, activation='relu'),
@@ -167,11 +182,27 @@ def get_custom_cnn():
     ]
     model = Sequential(model_layers, name='CustomModel-CNN')
     model.compile(
-        optimizer=Adam(learning_rate=0.0001),
+        optimizer=Adam(),
         loss=BinaryCrossentropy(),
         metrics='accuracy'
     )
     return model
+
+
+def plot_confision_matrix(model, test_dataset, version_name):
+    predictions = []
+    labels = []
+    for x, y in test_dataset:
+        predictions += list(model.predict(x).reshape(-1))
+        labels += list(y.numpy().astype(float))
+
+    matrix = tf.math.confusion_matrix(labels=labels, predictions=predictions).numpy()
+    df = pd.DataFrame(matrix)
+    df.columns = test_dataset.class_names
+    df.index = test_dataset.class_names
+    cf = sn.heatmap(df, annot=True, fmt="d")
+    cf.set(xlabel='Actuals', ylabel='Predicted')
+    cf.get_figure().savefig(version_name)
 
 
 def main():
@@ -181,6 +212,7 @@ def main():
     # Load data into a generator:
     train_ds = get_dataset(BATCH_SIZE, IM_HEIGHT, IM_WIDTH)
     val_ds = get_dataset(BATCH_SIZE, IM_HEIGHT, IM_WIDTH, subset='validation')
+    test_ds = get_test_dataset(BATCH_SIZE, IM_HEIGHT, IM_WIDTH)
 
     # Normalize data prior training:
     normalization_layer = layers.Rescaling(1./255)
@@ -192,9 +224,16 @@ def main():
 
     # Start training:
     model = get_custom_cnn()
-    tb_logs = TensorBoard(get_logs_dir(model.name))
-    early_stop = EarlyStopping(patience=10)
+    version_name = get_model_version_name(model.name)
+    tb_logs = TensorBoard(os.path.join(LOGS_DIR, version_name))
+    early_stop = EarlyStopping(patience=PATIENCE, restore_best_weights=True)
     model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=[tb_logs, early_stop])
+    model.save(os.path.join(MODELS_DIR, f"{version_name}.h5"))
+
+    # Evaluate the model:
+    test_score = model.evaluate(test_ds)
+    print(f"Test Score: {test_score}")
+    plot_confision_matrix(model, test_ds, os.path.join(CM_DIR, f"{version_name}.png"))
     return {}
 
 
