@@ -13,11 +13,12 @@ Description: <Some description>
 from tqdm import tqdm
 from pytz import timezone
 from datetime import datetime
+from tensorflow.keras import layers
+from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import image_dataset_from_directory
 from tensorflow.keras.models import Sequential
-from tensorflow.keras import layers
 from tensorflow.keras.losses import BinaryCrossentropy
-from tensorflow.keras.callbacks import TensorBoard
+from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
 import tensorflow as tf
 import os
 import shutil
@@ -29,15 +30,15 @@ TRAIN_DIR = os.path.join(os.getcwd(), 'Datasets', 'Train')
 TEST_DIR = os.path.join(os.getcwd(), 'Datasets', 'Test')
 LOGS_DIR = os.path.join(os.getcwd(), 'Logs')
 BATCH_SIZE = 32
-IM_HEIGHT = 200
-IM_WIDTH = 200
-EPOCHS = 10
+IM_HEIGHT = 256
+IM_WIDTH = 256
+EPOCHS = 50
 
 
-def get_logs_dir():
+def get_logs_dir(model_name: str):
     ts = datetime.now(timezone('America/Costa_Rica'))
-    run_id = ts.strftime("run_%Y%m%d-%H%M%S")
-    return os.path.join(LOGS_DIR, run_id)
+    run_id = ts.strftime("%Y%m%d-%H%M%S")
+    return os.path.join(LOGS_DIR, f"{model_name}_{run_id}")
 
 
 def reset_folders():
@@ -100,14 +101,73 @@ def get_dataset(batch_size: int, im_height: int, im_width: int, subset: str = 't
     )
 
 
-def get_baseline_network():
-    model = Sequential([
+def get_baseline_nn():
+    model_layers = [
         layers.Flatten(input_shape=(IM_HEIGHT, IM_WIDTH, 3)),
+        layers.Dense(200, activation='relu'),
         layers.Dense(100, activation='relu'),
         layers.Dense(1, activation='sigmoid')
-    ])
+    ]
+    model = Sequential(model_layers, name='BaselineModel')
     model.compile(
-        optimizer='adam',
+        optimizer=Adam(),
+        loss=BinaryCrossentropy(),
+        metrics='accuracy'
+    )
+    return model
+
+
+def get_custom_nn():
+    model_layers = [
+        layers.Flatten(input_shape=(IM_HEIGHT, IM_WIDTH, 3)),
+        layers.Dense(200, activation='relu'),
+        layers.Dense(100, activation='relu'),
+        layers.Dropout(0.2),
+        layers.Dense(1, activation='sigmoid')
+    ]
+    model = Sequential(model_layers, name='CustomModelOne')
+    model.compile(
+        optimizer=Adam(),
+        loss=BinaryCrossentropy(),
+        metrics='accuracy'
+    )
+    return model
+
+
+def get_best_cnn():
+    model_layers = [
+        layers.Conv2D(64, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
+        layers.MaxPool2D(),
+        layers.Conv2D(32, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
+        layers.MaxPool2D(),
+        layers.Flatten(),
+        layers.Dense(128, activation='relu'),
+        layers.Dense(1, activation='sigmoid')
+    ]
+    model = Sequential(model_layers, name='CustomModel-BestCNNSoFar')
+    model.compile(
+        optimizer=Adam(),
+        loss=BinaryCrossentropy(),
+        metrics='accuracy'
+    )
+    return model
+
+
+def get_custom_cnn():
+    model_layers = [
+        layers.RandomFlip(),
+        layers.RandomRotation(0.45),
+        layers.Conv2D(64, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
+        layers.MaxPool2D(),
+        layers.Conv2D(32, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
+        layers.MaxPool2D(),
+        layers.Flatten(),
+        layers.Dense(128, activation='relu'),
+        layers.Dense(1, activation='sigmoid')
+    ]
+    model = Sequential(model_layers, name='CustomModel-CNN')
+    model.compile(
+        optimizer=Adam(learning_rate=0.0001),
         loss=BinaryCrossentropy(),
         metrics='accuracy'
     )
@@ -130,13 +190,11 @@ def main():
     train_ds = train_ds.cache().prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
 
-    # Get some callbacks to use during training:
-    tb_logs = TensorBoard(get_logs_dir())
-
     # Start training:
-    bs_model = get_baseline_network()
-    history = bs_model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=[tb_logs])
-    print(history)
+    model = get_custom_cnn()
+    tb_logs = TensorBoard(get_logs_dir(model.name))
+    early_stop = EarlyStopping(patience=10)
+    model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=[tb_logs, early_stop])
     return {}
 
 
