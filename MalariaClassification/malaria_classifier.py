@@ -14,11 +14,11 @@ from tqdm import tqdm
 from pytz import timezone
 from datetime import datetime
 from tensorflow.keras import layers
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers import Adam, SGD
 from tensorflow.keras.utils import image_dataset_from_directory
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.losses import BinaryCrossentropy
-from tensorflow.keras.callbacks import TensorBoard, EarlyStopping
+from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ReduceLROnPlateau
 import tensorflow as tf
 import seaborn as sn
 import pandas as pd
@@ -173,18 +173,22 @@ def get_custom_cnn():
         layers.RandomFlip(),
         layers.RandomRotation(0.3),
         layers.RandomContrast(0.3),
-        layers.Conv2D(64, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
+        layers.Conv2D(128, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu', kernel_initializer='he_uniform'),
         layers.MaxPool2D(),
-        layers.Conv2D(32, 3, activation='relu'),
+        layers.Conv2D(64, 3, activation='relu', kernel_initializer='he_uniform'),
+        layers.MaxPool2D(),
+        layers.Conv2D(64, 3, activation='relu', kernel_initializer='he_uniform'),
         layers.MaxPool2D(),
         layers.Flatten(),
         layers.Dropout(0.2),
-        layers.Dense(128, activation='relu'),
+        layers.Dense(100, activation='relu', kernel_initializer='he_uniform'),
+        layers.Dropout(0.2),
+        layers.Dense(100, activation='relu', kernel_initializer='he_uniform'),
         layers.Dense(1, activation='sigmoid')
     ]
     model = Sequential(model_layers, name='CustomModel-CNN')
     model.compile(
-        optimizer=Adam(),
+        optimizer=SGD(momentum=0.9, nesterov=True),
         loss=BinaryCrossentropy(),
         metrics='accuracy'
     )
@@ -229,7 +233,8 @@ def main():
     version_name = get_model_version_name(model.name)
     tb_logs = TensorBoard(os.path.join(LOGS_DIR, version_name))
     early_stop = EarlyStopping(patience=PATIENCE, restore_best_weights=True)
-    model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=[tb_logs, early_stop])
+    lr_scheduler = ReduceLROnPlateau(factor=.5, patience=5)
+    model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=[tb_logs, early_stop, lr_scheduler])
     model.save(os.path.join(MODELS_DIR, f"{version_name}.h5"))
 
     # Evaluate single model:
