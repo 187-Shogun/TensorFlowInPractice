@@ -38,6 +38,7 @@ IM_HEIGHT = 200
 IM_WIDTH = 200
 EPOCHS = 100
 PATIENCE = 20
+RANDOM_SEED = 420
 
 
 def get_model_version_name(model_name: str):
@@ -56,7 +57,7 @@ def reset_folders():
     os.makedirs(os.path.join(TEST_DIR, 'Uninfected'))
 
 
-def split_raw_dataset(test_split: float = 0.2, reset: bool = True):
+def split_raw_dataset(test_split: float = 0.2, reset: bool = False):
     # Check if work is already done:
     if reset is False:
         return None
@@ -68,7 +69,7 @@ def split_raw_dataset(test_split: float = 0.2, reset: bool = True):
         total_test_images = int(total_images * test_split)
 
         # Randomly select images from the raw dataset:
-        random.seed(420)
+        random.seed(RANDOM_SEED)
         random.shuffle(infected)
         train_infected = infected[total_test_images:]
         train_uninfected = uninfected[total_test_images:]
@@ -100,7 +101,7 @@ def get_dataset(batch_size: int, im_height: int, im_width: int, subset: str = 't
         TRAIN_DIR,
         validation_split=validation,
         subset=subset,
-        seed=420,
+        seed=RANDOM_SEED,
         image_size=(im_height, im_width),
         batch_size=batch_size,
     )
@@ -109,7 +110,7 @@ def get_dataset(batch_size: int, im_height: int, im_width: int, subset: str = 't
 def get_test_dataset(batch_size: int, im_height: int, im_width: int):
     return image_dataset_from_directory(
         TEST_DIR,
-        seed=420,
+        seed=RANDOM_SEED,
         image_size=(im_height, im_width),
         batch_size=batch_size,
     )
@@ -170,13 +171,14 @@ def get_best_cnn():
 def get_custom_cnn():
     model_layers = [
         layers.RandomFlip(),
-        layers.RandomRotation((0.0, 1.0)),
-        layers.RandomContrast((0.0, 0.5)),
+        layers.RandomRotation(0.3),
+        layers.RandomContrast(0.3),
         layers.Conv2D(64, 3, input_shape=(IM_HEIGHT, IM_WIDTH, 3), activation='relu'),
         layers.MaxPool2D(),
         layers.Conv2D(32, 3, activation='relu'),
         layers.MaxPool2D(),
         layers.Flatten(),
+        layers.Dropout(0.2),
         layers.Dense(128, activation='relu'),
         layers.Dense(1, activation='sigmoid')
     ]
@@ -222,7 +224,7 @@ def main():
     train_ds = train_ds.cache().prefetch(buffer_size=AUTOTUNE)
     val_ds = val_ds.cache().prefetch(buffer_size=AUTOTUNE)
 
-    # Start training:
+    # Start training a single model:
     model = get_custom_cnn()
     version_name = get_model_version_name(model.name)
     tb_logs = TensorBoard(os.path.join(LOGS_DIR, version_name))
@@ -230,7 +232,7 @@ def main():
     model.fit(train_ds, validation_data=val_ds, epochs=EPOCHS, callbacks=[tb_logs, early_stop])
     model.save(os.path.join(MODELS_DIR, f"{version_name}.h5"))
 
-    # Evaluate the model:
+    # Evaluate single model:
     test_score = model.evaluate(test_ds)
     print(f"Test Score: {test_score}")
     plot_confision_matrix(model, test_ds, os.path.join(CM_DIR, f"{version_name}.png"))
