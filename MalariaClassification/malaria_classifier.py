@@ -16,8 +16,9 @@ from datetime import datetime
 from tensorflow.keras import layers
 from tensorflow.keras.optimizers import Adam, SGD
 from tensorflow.keras.utils import image_dataset_from_directory
-from tensorflow.keras.models import Sequential
+from tensorflow.keras import models
 from tensorflow.keras.losses import BinaryCrossentropy
+from tensorflow.keras import metrics
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ReduceLROnPlateau
 import tensorflow as tf
 import seaborn as sn
@@ -123,7 +124,7 @@ def get_baseline_nn():
         layers.Dense(100, activation='relu'),
         layers.Dense(1, activation='sigmoid')
     ]
-    model = Sequential(model_layers, name='BaselineModel')
+    model = models.Sequential(model_layers, name='BaselineModel')
     model.compile(
         optimizer=Adam(),
         loss=BinaryCrossentropy(),
@@ -140,7 +141,7 @@ def get_custom_nn():
         layers.Dropout(0.2),
         layers.Dense(1, activation='sigmoid')
     ]
-    model = Sequential(model_layers, name='CustomModelOne')
+    model = models.Sequential(model_layers, name='CustomModelOne')
     model.compile(
         optimizer=Adam(),
         loss=BinaryCrossentropy(),
@@ -159,7 +160,7 @@ def get_best_cnn():
         layers.Dense(128, activation='relu'),
         layers.Dense(1, activation='sigmoid')
     ]
-    model = Sequential(model_layers, name='CustomModel-BestCNNSoFar')
+    model = models.Sequential(model_layers, name='CustomModel-BestCNNSoFar')
     model.compile(
         optimizer=Adam(),
         loss=BinaryCrossentropy(),
@@ -186,7 +187,7 @@ def get_custom_cnn():
         layers.Dense(100, activation='relu', kernel_initializer='he_uniform'),
         layers.Dense(1, activation='sigmoid')
     ]
-    model = Sequential(model_layers, name='CustomModel-CNN')
+    model = models.Sequential(model_layers, name='CustomModel-CNN')
     model.compile(
         optimizer=SGD(momentum=0.9, nesterov=True),
         loss=BinaryCrossentropy(),
@@ -196,12 +197,15 @@ def get_custom_cnn():
 
 
 def plot_confision_matrix(model, test_dataset, version_name):
+    # Fetch predictions and true labels:
+    print("Fetching predictions...")
     predictions = []
     labels = []
     for x, y in test_dataset:
         predictions += list(model.predict(x).reshape(-1))
         labels += list(y.numpy().astype(float))
 
+    # Build a confusion matrix and save the plot in a PNG file:
     matrix = tf.math.confusion_matrix(labels=labels, predictions=predictions).numpy()
     df = pd.DataFrame(matrix)
     df.columns = test_dataset.class_names
@@ -209,6 +213,39 @@ def plot_confision_matrix(model, test_dataset, version_name):
     cf = sn.heatmap(df, annot=True, fmt="d")
     cf.set(xlabel='Actuals', ylabel='Predicted')
     cf.get_figure().savefig(version_name)
+
+    # Compute precision and recall:
+    precision = metrics.Precision()
+    precision.update_state(labels, predictions)
+    print(f"Model's Precision: {precision.result().numpy()}")
+    recall = metrics.Recall()
+    recall.update_state(labels, predictions)
+    print(f"Model's Recall: {recall.result().numpy()}")
+
+
+def evaluate_existing_model():
+    # Load test dataset and model from H5 file:
+    test_ds = get_test_dataset(BATCH_SIZE, IM_HEIGHT, IM_WIDTH)
+    best_model = 'CustomModel-CNN_v.20220207-232113.h5'
+    model = models.load_model(os.path.join(MODELS_DIR, best_model))
+
+    # Fetch predictions and true labels:
+    predictions = []
+    labels = []
+    for x, y in tqdm(test_ds, desc="Fetching predictions"):
+        predictions += list(model.predict(x).reshape(-1))
+        labels += list(y.numpy().astype(float))
+
+    # Compute accuracy, precision and recall:
+    print("Evaluating model on test data:")
+    test_score = model.evaluate(test_ds)
+    print(f"Model's Accuracy: {test_score}")
+    precision = metrics.Precision()
+    precision.update_state(labels, predictions)
+    print(f"Model's Precision: {precision.result().numpy()}")
+    recall = metrics.Recall()
+    recall.update_state(labels, predictions)
+    print(f"Model's Recall: {recall.result().numpy()}")
 
 
 def main():
