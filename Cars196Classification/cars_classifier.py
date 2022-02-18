@@ -46,26 +46,23 @@ def get_model_version_name(model_name: str) -> str:
 
 def download_dataset() -> tuple:
     """ Get dataset from the TFDS library. """
-    train, info = tfds.load(
+    train_a, info = tfds.load(
         'cars196',
         shuffle_files=True,
         with_info=True,
         as_supervised=True,
         split=['train']
     )
-    val = tfds.load(
+    a, b, c = tfds.even_splits('test', n=3, drop_remainder=True)
+    train_b, val, test = tfds.load(
         'cars196',
         shuffle_files=True,
         as_supervised=True,
-        split=['test[75%:]']
-    ),
-    test = tfds.load(
-        'cars196',
-        shuffle_files=True,
-        as_supervised=True,
-        split=['test[:75%]']
+        split=[a, b, c]
     )
-    return train[0], val[0][0], test[0], info
+    # Unpack elements:
+    train = train_a[0].concatenate(train_b)
+    return train, val, test, info
 
 
 def get_baseline_nn(num_classes: int):
@@ -136,7 +133,7 @@ def train_pretrained_network(ds_info, training_ds, validation_ds, pretrain_round
     # Import pretrained lower layers:
     label_names = ds_info.features['label'].names
     input_shape = (IM_HEIGHT, IM_WIDTH, 3)
-    base_model = applications.resnet_v2.ResNet101V2(weights='imagenet', include_top=False, input_shape=input_shape)
+    base_model = applications.resnet_v2.ResNet152V2(weights='imagenet', include_top=False, input_shape=input_shape)
     for layer in base_model.layers:
         layer.trainable = False
 
@@ -144,7 +141,7 @@ def train_pretrained_network(ds_info, training_ds, validation_ds, pretrain_round
     pooling_layer = layers.GlobalAveragePooling2D()(base_model.output)
     dropout_layer = layers.Dropout(0.25)(pooling_layer)
     out_layer = layers.Dense(len(label_names), activation='softmax')(dropout_layer)
-    model = Model(inputs=base_model.inputs, outputs=out_layer, name='ResNet50V2-CNN')
+    model = Model(inputs=base_model.inputs, outputs=out_layer, name='ResNet152V2-CNN')
     model.compile(
         optimizer=optimizers.SGD(momentum=0.9, nesterov=True),
         loss=losses.SparseCategoricalCrossentropy(),
@@ -176,8 +173,8 @@ def get_preprocessing_layer():
     """ Stack preprocessing layers together. """
     return models.Sequential([
         layers.RandomFlip(),
-        layers.RandomRotation(0.3)
-        # layers.RandomContrast(0.3)
+        layers.RandomRotation(0.3),
+        layers.RandomContrast(0.3)
     ])
 
 
@@ -190,16 +187,14 @@ def main():
     preprocessing_layer = get_preprocessing_layer()
     X_train = X_train.map(lambda x, y: (image.resize(x, [IM_HEIGHT, IM_WIDTH], method=method), y))
     X_train = X_train.map(lambda x, y: (normalization_layer(x), y))
-    X_train = X_train.map(lambda x, y: (preprocessing_layer(x), y))
-    X_train = X_train.batch(BATCH_SIZE).prefetch(buffer_size=AUTOTUNE)
+    X_train = X_train.batch(BATCH_SIZE).map(lambda x, y: (preprocessing_layer(x), y)).prefetch(buffer_size=AUTOTUNE)
     X_val = X_val.map(lambda x, y: (image.resize(x, [IM_HEIGHT, IM_WIDTH], method=method), y))
     X_val = X_val.map(lambda x, y: (normalization_layer(x), y))
     X_val = X_val.batch(BATCH_SIZE).prefetch(buffer_size=AUTOTUNE)
 
     # Start training a single model:
     model = train_pretrained_network(info, X_train, X_val)
-    print(model.name)
-    return {}
+    return model
 
 
 if __name__ == "__main__":
