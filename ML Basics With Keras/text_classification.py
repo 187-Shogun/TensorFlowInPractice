@@ -186,9 +186,9 @@ def main():
     # Build a network and train it:
     EMBEDDING_DIM = 32
     EPOCHS = 10
-    # model = build_neural_network(max_features=MAX_FEATURES, embedding_dim=EMBEDDING_DIM)
-    model = build_custom_network()
-    training_data = model.fit(x=raw_train_ds, validation_data=raw_val_ds, epochs=EPOCHS)
+    model = build_neural_network(max_features=MAX_FEATURES, embedding_dim=EMBEDDING_DIM)
+    # model = build_custom_network()
+    training_data = model.fit(x=train_ds, validation_data=val_ds, epochs=EPOCHS)
     history_dict = training_data.history
     plot_loss(history_dict)
     plot_accuracy(history_dict)
