@@ -27,13 +27,13 @@ import re
 import string
 
 AUTOTUNE = tf.data.AUTOTUNE
-EPOCHS = 100
+EPOCHS = 10
 BATCH_SIZE = 32
 PATIENCE = 10
-RANDOM_SEED = 420
+RANDOM_SEED = 69
 MAX_FEATURES = 10_000
-SEQ_LENGTH = 420
-EMBEDDING_DIM = 64
+SEQ_LENGTH = 256
+EMBEDDING_DIM = 32
 LOGS_DIR = os.path.join(os.getcwd(), 'Logs')
 CM_DIR = os.path.join(os.getcwd(), 'ConfusionMatrixes')
 MODELS_DIR = os.path.join(os.getcwd(), 'Models')
@@ -53,14 +53,16 @@ def get_dataset():
         shuffle_files=True,
         with_info=True,
         as_supervised=True,
-        split=['train']
+        split=['train'],
+        batch_size=BATCH_SIZE
     )
     a, b, c = tfds.even_splits('test', n=3, drop_remainder=True)
     train_b, val, test = tfds.load(
         'imdb_reviews',
         shuffle_files=True,
         as_supervised=True,
-        split=[a, b, c]
+        split=[a, b, c],
+        batch_size=BATCH_SIZE
     )
     # Unpack elements:
     train = train_a[0].concatenate(train_b)
@@ -93,7 +95,9 @@ def text_to_vector(vxt_layer, sample_text, sample_label):
 def build_dummy_network() -> Sequential:
     lyrs = [
         layers.Embedding(MAX_FEATURES + 1, EMBEDDING_DIM),
+        layers.GlobalMaxPool1D(),
         layers.Dense(128, activation='relu'),
+        layers.Dropout(0.3),
         layers.Dense(1)
     ]
     model = Sequential(name='Dummy-NN', layers=lyrs)
@@ -139,19 +143,16 @@ def main():
     # Configure datasets:
     vxt_layer = vectorized_layer(max_features=MAX_FEATURES, sequence_length=SEQ_LENGTH)
     vxt_layer.adapt(X_train.map(lambda x, y: x))
-    X_train = X_train.cache().batch(BATCH_SIZE)
     X_train = X_train.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
-    X_train = X_train.prefetch(buffer_size=AUTOTUNE)
-    X_val = X_val.cache().batch(BATCH_SIZE)
+    X_train = X_train.cache().prefetch(buffer_size=AUTOTUNE)
     X_val = X_val.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
-    X_val = X_val.prefetch(buffer_size=AUTOTUNE)
-    X_test = X_test.cache().batch(BATCH_SIZE)
+    X_val = X_val.cache().prefetch(buffer_size=AUTOTUNE)
     X_test = X_test.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
-    X_test = X_test.prefetch(buffer_size=AUTOTUNE)
+    X_test = X_test.cache().prefetch(buffer_size=AUTOTUNE)
 
     # Build a network and train it:
     model = build_dummy_network()
-    model.fit(X_train, validation_data=X_val, epochs=10)
+    model.fit(X_train, validation_data=X_val, epochs=EPOCHS)
     score = model.evaluate(X_test)
     print(score)
     return {}
