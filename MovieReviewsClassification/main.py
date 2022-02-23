@@ -20,8 +20,9 @@ from tensorflow.keras import callbacks
 from datetime import datetime
 from pytz import timezone
 import tensorflow as tf
-# import tensorflow_hub as hub
+import tensorflow_hub as hub
 import tensorflow_datasets as tfds
+import tensorflow_text
 import os
 import re
 import string
@@ -31,9 +32,9 @@ EPOCHS = 10
 BATCH_SIZE = 32
 PATIENCE = 10
 RANDOM_SEED = 69
-MAX_FEATURES = 10_000
-SEQ_LENGTH = 256
-EMBEDDING_DIM = 32
+MAX_FEATURES = 25_000
+SEQ_LENGTH = 128
+EMBEDDING_DIM = 64
 LOGS_DIR = os.path.join(os.getcwd(), 'Logs')
 CM_DIR = os.path.join(os.getcwd(), 'ConfusionMatrixes')
 MODELS_DIR = os.path.join(os.getcwd(), 'Models')
@@ -76,14 +77,28 @@ def text_normalization(data):
     return tf.strings.regex_replace(html_stripped, '[%s]' % re.escape(string.punctuation), '')
 
 
-def vectorized_layer(max_features: int, sequence_length: int):
+def txt_to_vec_layer(max_features: int, sequence_length: int):
     """ Create a TextVectorization layer to transform each word into a unique integer in an index. """
-    return layers.TextVectorization(
+    corpus_a = tfds.load(
+        'imdb_reviews',
+        shuffle_files=True,
+        as_supervised=True,
+        split=['train'],
+    )
+    corpus_b = tfds.load(
+        'imdb_reviews',
+        shuffle_files=True,
+        as_supervised=True,
+        split=['unsupervised'],
+    )
+    vxt = layers.TextVectorization(
         standardize=text_normalization,
         max_tokens=max_features,
         output_mode='int',
         output_sequence_length=sequence_length
     )
+    vxt.adapt(corpus_a[0].concatenate(corpus_b[0]).map(lambda x, y: x))
+    return vxt
 
 
 def text_to_vector(vxt_layer, sample_text, sample_label):
@@ -93,10 +108,11 @@ def text_to_vector(vxt_layer, sample_text, sample_label):
 
 
 def build_dummy_network() -> Sequential:
+    """ Build a baseline network. """
     lyrs = [
+        txt_to_vec_layer(max_features=MAX_FEATURES, sequence_length=SEQ_LENGTH),
         layers.Embedding(MAX_FEATURES + 1, EMBEDDING_DIM),
         layers.GlobalMaxPool1D(),
-        layers.Dense(128, activation='relu'),
         layers.Dropout(0.3),
         layers.Dense(1)
     ]
@@ -104,7 +120,57 @@ def build_dummy_network() -> Sequential:
     model.compile(
         loss=losses.BinaryCrossentropy(from_logits=True),
         optimizer=optimizers.Adam(),
-        metrics=metrics.BinaryAccuracy(threshold=0.0)
+        metrics=metrics.BinaryAccuracy()
+    )
+    return model
+
+
+def build_custom_network() -> Sequential:
+    """ Build a sequential model using a pretrained embedding layer from TFHub. """
+    # TFHub Sources:
+    emb_layer = "https://tfhub.dev/google/tf2-preview/nnlm-en-dim128-with-normalization/1"
+
+    # Assemble the model:
+    lyrs = [
+        hub.KerasLayer(emb_layer, input_shape=[], dtype=tf.string),
+        layers.Dense(128, activation='relu'),
+        layers.Dropout(0.3),
+        layers.Dense(1)
+    ]
+    model = Sequential(name='Pretrained-NN', layers=lyrs)
+
+    # Compile it and return it:
+    model.compile(
+        loss=losses.BinaryCrossentropy(from_logits=True),
+        optimizer=optimizers.Adam(),
+        metrics=metrics.BinaryAccuracy()
+    )
+    return model
+
+
+# noinspection PyCallingNonCallable
+def bert_network() -> tf.keras.Model:
+    """ Return a pretrained BERT model from tensorflow hub. """
+    # TFHub Sources:
+    preprocessor_url = "https://tfhub.dev/tensorflow/bert_en_uncased_preprocess/3"
+    encoder_url = "https://tfhub.dev/tensorflow/small_bert/bert_en_uncased_L-2_H-128_A-2/2"
+
+    # Assemble model:
+    text_input = layers.Input(shape=(), dtype=tf.string)
+    preprocessor = hub.KerasLayer(preprocessor_url)
+    encoder_inputs = preprocessor(text_input)
+    encoder = hub.KerasLayer(encoder_url, trainable=True)
+    outputs = encoder(encoder_inputs)
+    pooled_output = outputs["pooled_output"]
+    cls_layer = layers.Dense(1)
+    cls_output = cls_layer(pooled_output)
+
+    # Compile it and return it:
+    model = tf.keras.Model(inputs=text_input, outputs=cls_output, name='BERT-DNN')
+    model.compile(
+        loss=losses.BinaryCrossentropy(from_logits=True),
+        optimizer=optimizers.Adam(),
+        metrics=metrics.BinaryAccuracy()
     )
     return model
 
@@ -137,21 +203,14 @@ def train_pretrained_network(training_ds, validation_ds, pretrain_rounds=10):
 
 def main():
     """ Run script. """
-    # Fetch datasets:
+    # Fetch datasets and configure them:
     X_train, X_val, X_test, info = get_dataset()
-
-    # Configure datasets:
-    vxt_layer = vectorized_layer(max_features=MAX_FEATURES, sequence_length=SEQ_LENGTH)
-    vxt_layer.adapt(X_train.map(lambda x, y: x))
-    X_train = X_train.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
     X_train = X_train.cache().prefetch(buffer_size=AUTOTUNE)
-    X_val = X_val.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
     X_val = X_val.cache().prefetch(buffer_size=AUTOTUNE)
-    X_test = X_test.map(lambda x, y: text_to_vector(vxt_layer=vxt_layer, sample_text=x, sample_label=y))
     X_test = X_test.cache().prefetch(buffer_size=AUTOTUNE)
 
     # Build a network and train it:
-    model = build_dummy_network()
+    model = bert_network()
     model.fit(X_train, validation_data=X_val, epochs=EPOCHS)
     score = model.evaluate(X_test)
     print(score)
